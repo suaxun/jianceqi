@@ -1,6 +1,5 @@
 import { eventSource, event_types } from '../../../script.js';
 import { extension_settings, getContext, saveSettingsDebounced } from '../../../extensions.js';
-import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const extensionName = 'world-info-debugger';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}/`;
@@ -22,13 +21,15 @@ class WorldInfoDebugger {
     }
 
     async init() {
+        console.log('[WI Debugger] Initializing...');
+        
         // Load settings
         if (!extension_settings[extensionName]) {
             extension_settings[extensionName] = this.settings;
         }
         this.settings = extension_settings[extensionName];
 
-        // Create UI
+        // Create UI - 等 DOM 完全加载
         this.createUI();
         
         // Setup hooks
@@ -37,54 +38,102 @@ class WorldInfoDebugger {
             this.scanEnvironment();
         }
         
-        this.log('info', 'System', 'World Info Import Debugger initialized');
+        this.log('info', 'System', '✓ World Info Import Debugger initialized');
+        console.log('[WI Debugger] ✓ Initialized successfully');
     }
 
     createUI() {
-        const html = `
-            <div id="wi-debugger-container" class="wi-debugger-panel">
-                <div class="wi-debugger-header">
-                    <h3>🔍 World Info Import Debugger</h3>
-                    <label>
-                        <input type="checkbox" id="wi-debugger-enabled" ${this.settings.enabled ? 'checked' : ''}>
-                        Enable Monitoring
-                    </label>
-                </div>
-                
-                <div class="wi-stats">
-                    <div class="wi-stat">
-                        <div class="wi-stat-value" id="import-count">0</div>
-                        <div class="wi-stat-label">Total Imports</div>
+        // 创建一个新的设置块
+        const settingsHtml = `
+            <div class="wi-debugger-settings">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <b>🔍 World Info Import Debugger</b>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                     </div>
-                    <div class="wi-stat">
-                        <div class="wi-stat-value" id="fail-count">0</div>
-                        <div class="wi-stat-label">Failed (0 entries)</div>
+                    <div class="inline-drawer-content">
+                        <div class="wi-debugger-panel">
+                            <div class="wi-debugger-header">
+                                <label class="checkbox_label">
+                                    <input type="checkbox" id="wi-debugger-enabled" ${this.settings.enabled ? 'checked' : ''}>
+                                    <span>Enable Monitoring</span>
+                                </label>
+                            </div>
+                            
+                            <div class="wi-stats">
+                                <div class="wi-stat">
+                                    <div class="wi-stat-value" id="import-count">0</div>
+                                    <div class="wi-stat-label">Total Imports</div>
+                                </div>
+                                <div class="wi-stat">
+                                    <div class="wi-stat-value" id="fail-count">0</div>
+                                    <div class="wi-stat-label">Failed (0 entries)</div>
+                                </div>
+                                <div class="wi-stat">
+                                    <div class="wi-stat-value" id="extension-count">-</div>
+                                    <div class="wi-stat-label">Active Extensions</div>
+                                </div>
+                                <div class="wi-stat">
+                                    <div class="wi-stat-value" id="hook-count">0</div>
+                                    <div class="wi-stat-label">Active Hooks</div>
+                                </div>
+                            </div>
+                            
+                            <div class="wi-debugger-log" id="wi-debug-log">
+                                <div class="log-entry info">
+                                    <span class="log-timestamp">00:00:00.000</span>
+                                    <span class="log-source">[System]</span>
+                                    <span class="log-message">Waiting for initialization...</span>
+                                </div>
+                            </div>
+                            
+                            <div class="wi-debugger-controls">
+                                <button class="menu_button" id="wi-clear-log">Clear Log</button>
+                                <button class="menu_button" id="wi-export-log">Export Log</button>
+                                <button class="menu_button" id="wi-test-import">Test Current Char</button>
+                                <button class="menu_button" id="wi-analyze">Deep Analysis</button>
+                            </div>
+                        </div>
                     </div>
-                    <div class="wi-stat">
-                        <div class="wi-stat-value" id="extension-count">-</div>
-                        <div class="wi-stat-label">Active Extensions</div>
-                    </div>
-                    <div class="wi-stat">
-                        <div class="wi-stat-value" id="hook-count">0</div>
-                        <div class="wi-stat-label">Active Hooks</div>
-                    </div>
-                </div>
-                
-                <div class="wi-debugger-log" id="wi-debug-log"></div>
-                
-                <div class="wi-debugger-controls">
-                    <button class="menu_button" id="wi-clear-log">Clear Log</button>
-                    <button class="menu_button" id="wi-export-log">Export Log</button>
-                    <button class="menu_button" id="wi-test-import">Test Current Char</button>
-                    <button class="menu_button" id="wi-analyze">Deep Analysis</button>
                 </div>
             </div>
         `;
 
-        // Add to extensions panel
-        $('#extensions_settings2').append(html);
+        // 尝试多个可能的注入点
+        const possibleTargets = [
+            '#extensions_settings',
+            '#extensions_settings2', 
+            '#world_info_settings',
+            '#character_world_settings',
+            '.drawer-content.wide_drawer_content'
+        ];
 
-        // Setup event listeners
+        let injected = false;
+        for (const target of possibleTargets) {
+            const element = $(target);
+            if (element.length > 0) {
+                element.append(settingsHtml);
+                console.log(`[WI Debugger] UI injected into: ${target}`);
+                injected = true;
+                break;
+            }
+        }
+
+        if (!injected) {
+            // 如果都找不到，直接添加到 body
+            console.warn('[WI Debugger] Could not find extension settings panel, adding to body');
+            $('body').append(`<div id="wi-debugger-fallback" style="position: fixed; bottom: 20px; right: 20px; z-index: 9999; max-width: 500px;">${settingsHtml}</div>`);
+        }
+
+        // 等待 DOM 更新后再绑定事件
+        setTimeout(() => {
+            this.bindUIEvents();
+        }, 100);
+    }
+
+    bindUIEvents() {
+        console.log('[WI Debugger] Binding UI events...');
+
         $('#wi-debugger-enabled').on('change', (e) => {
             this.settings.enabled = e.target.checked;
             extension_settings[extensionName] = this.settings;
@@ -92,21 +141,42 @@ class WorldInfoDebugger {
             
             if (this.settings.enabled) {
                 this.setupHooks();
-                this.log('success', 'System', 'Monitoring enabled');
+                this.log('success', 'System', '✓ Monitoring enabled');
             } else {
-                this.log('warning', 'System', 'Monitoring disabled');
+                this.log('warning', 'System', '⚠ Monitoring disabled');
             }
         });
 
-        $('#wi-clear-log').on('click', () => this.clearLog());
-        $('#wi-export-log').on('click', () => this.exportLog());
-        $('#wi-test-import').on('click', () => this.testCurrentCharacter());
-        $('#wi-analyze').on('click', () => this.analyzeExtensions());
+        $('#wi-clear-log').on('click', () => {
+            console.log('[WI Debugger] Clear log clicked');
+            this.clearLog();
+        });
+
+        $('#wi-export-log').on('click', () => {
+            console.log('[WI Debugger] Export log clicked');
+            this.exportLog();
+        });
+
+        $('#wi-test-import').on('click', () => {
+            console.log('[WI Debugger] Test import clicked');
+            this.testCurrentCharacter();
+        });
+
+        $('#wi-analyze').on('click', () => {
+            console.log('[WI Debugger] Analyze clicked');
+            this.analyzeExtensions();
+        });
+
+        console.log('[WI Debugger] ✓ UI events bound');
     }
 
     setupHooks() {
+        console.log('[WI Debugger] Setting up hooks...');
+
         // Hook importCharacter
-        this.hookFunction('importCharacter', window, 'importCharacter');
+        if (window.importCharacter) {
+            this.hookFunction('importCharacter', window, 'importCharacter');
+        }
         
         // Hook importEmbeddedWorldInfo
         if (window.importEmbeddedWorldInfo) {
@@ -118,7 +188,7 @@ class WorldInfoDebugger {
             this.hookFunction('processDroppedFiles', window, 'processDroppedFiles');
         }
 
-        // Hook fetch for world info related requests
+        // Hook fetch
         this.hookFetch();
 
         // Listen to events
@@ -127,11 +197,8 @@ class WorldInfoDebugger {
             setTimeout(() => this.checkWorldInfo(), 500);
         });
 
-        eventSource.on(event_types.WORLDINFO_SETTINGS_UPDATED, () => {
-            this.log('info', 'Event', 'World Info settings updated');
-        });
-
         this.updateHookCount();
+        console.log('[WI Debugger] ✓ Hooks installed');
     }
 
     hookFunction(name, obj, key) {
@@ -178,17 +245,19 @@ class WorldInfoDebugger {
                 return result;
             } catch (error) {
                 const duration = performance.now() - startTime;
-                self.log('error', name, `✗ Failed after ${duration.toFixed(2)}ms: ${error.message}`);
-                self.log('error', 'Stack', error.stack);
+                self.log('error', name, `✗ Failed: ${error.message} (${duration.toFixed(2)}ms)`);
                 throw error;
             }
         };
 
-        this.log('success', 'Hook', `Hooked ${name}`);
+        this.log('success', 'Hook', `✓ Hooked ${name}`);
     }
 
     hookFetch() {
+        if (this.originalFetch) return; // Already hooked
+
         const originalFetch = window.fetch;
+        this.originalFetch = originalFetch;
         const self = this;
 
         window.fetch = async function(url, options) {
@@ -200,7 +269,7 @@ class WorldInfoDebugger {
 
             if (shouldLog) {
                 const method = options?.method || 'GET';
-                self.log('info', 'API', `${method} ${url}`);
+                self.log('info', 'API', `${method} ${url.substring(url.lastIndexOf('/'))}`);
 
                 const startTime = performance.now();
                 try {
@@ -208,26 +277,11 @@ class WorldInfoDebugger {
                     const duration = performance.now() - startTime;
 
                     self.log(response.ok ? 'success' : 'error', 'API', 
-                        `${response.status} in ${duration.toFixed(2)}ms`);
-
-                    // Try to read world info data
-                    if (response.ok && url.includes('worldinfo')) {
-                        const clone = response.clone();
-                        try {
-                            const data = await clone.json();
-                            if (data.entries !== undefined) {
-                                const count = Array.isArray(data.entries) ? data.entries.length : 0;
-                                self.log('info', 'API', `Response has ${count} WI entries`);
-                            }
-                        } catch (e) {
-                            // Response not JSON or already consumed
-                        }
-                    }
+                        `${response.status} (${duration.toFixed(0)}ms)`);
 
                     return response;
                 } catch (error) {
-                    const duration = performance.now() - startTime;
-                    self.log('error', 'API', `Request failed: ${error.message} (${duration.toFixed(2)}ms)`);
+                    self.log('error', 'API', `Failed: ${error.message}`);
                     throw error;
                 }
             }
@@ -235,46 +289,13 @@ class WorldInfoDebugger {
             return originalFetch(url, options);
         };
 
-        this.log('success', 'Hook', 'Hooked fetch()');
+        this.log('success', 'Hook', '✓ Hooked fetch()');
     }
 
     scanEnvironment() {
-        // Count extensions
         const extensionCount = Object.keys(extension_settings).length;
         $('#extension-count').text(extensionCount);
-
-        this.log('info', 'Scan', `Found ${extensionCount} extensions installed`);
-
-        // List extensions that might affect world info
-        const wiRelatedExtensions = Object.keys(extension_settings).filter(ext => {
-            const lower = ext.toLowerCase();
-            return lower.includes('world') || 
-                   lower.includes('lorebook') || 
-                   lower.includes('import') ||
-                   lower.includes('character');
-        });
-
-        if (wiRelatedExtensions.length > 0) {
-            this.log('warning', 'Scan', `WI-related extensions: ${wiRelatedExtensions.join(', ')}`);
-        }
-
-        // Check for suspicious global modifications
-        this.checkGlobalModifications();
-    }
-
-    checkGlobalModifications() {
-        const props = Object.getOwnPropertyNames(window);
-        const suspicious = props.filter(prop => {
-            return (prop.startsWith('ext_') || 
-                   prop.startsWith('plugin_')) &&
-                   (prop.includes('world') || 
-                   prop.includes('import') ||
-                   prop.includes('lorebook'));
-        });
-
-        if (suspicious.length > 0) {
-            this.log('warning', 'Scan', `Suspicious globals: ${suspicious.join(', ')}`);
-        }
+        this.log('info', 'Scan', `Found ${extensionCount} extensions`);
     }
 
     async checkWorldInfo() {
@@ -286,10 +307,8 @@ class WorldInfoDebugger {
 
         try {
             const char = context.characters[context.characterId];
-            
-            this.log('info', 'Check', `Checking WI for: ${char.name}`);
+            this.log('info', 'Check', `Checking: ${char.name}`);
 
-            // Check if character has embedded world info
             const response = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -303,67 +322,26 @@ class WorldInfoDebugger {
                 if (wiData && wiData.entries) {
                     const count = wiData.entries.length;
                     this.log(count === 0 ? 'warning' : 'success', 'Check', 
-                        `Character card contains ${count} WI entries`);
-                    
-                    if (count === 0) {
-                        this.log('info', 'Check', 'This might be normal if character has no embedded WI');
-                    }
+                        `Card has ${count} WI entries`);
                 } else {
-                    this.log('info', 'Check', 'No character_book field found in card');
+                    this.log('info', 'Check', 'No character_book in card');
                 }
             }
         } catch (error) {
-            this.log('error', 'Check', `Failed: ${error.message}`);
+            this.log('error', 'Check', `Error: ${error.message}`);
         }
     }
 
     diagnoseFailure(args, result) {
-        this.log('error', 'Diagnosis', '═══════════════════════════════');
-        this.log('error', 'Diagnosis', '⚠ IMPORT FAILURE DETECTED ⚠');
-        this.log('error', 'Diagnosis', '═══════════════════════════════');
-
-        // Check for hooked functions
-        this.log('info', 'Diagnosis', 'Checking for function modifications...');
+        this.log('error', 'Diagnosis', '════════════════════════');
+        this.log('error', 'Diagnosis', '⚠ FAILURE DETECTED');
+        this.log('error', 'Diagnosis', '════════════════════════');
         
-        let hookCount = 0;
-        Object.keys(this.originalFunctions).forEach(funcName => {
-            const current = window[funcName];
-            const original = this.originalFunctions[funcName];
-            
-            if (current && original && current.toString().length !== original.toString().length) {
-                this.log('warning', 'Diagnosis', `  ⚠ ${funcName} appears modified`);
-                hookCount++;
-            }
-        });
-
-        if (hookCount === 0) {
-            this.log('success', 'Diagnosis', '  ✓ No suspicious function modifications detected');
-        }
-
-        // Check event listener counts
-        this.log('info', 'Diagnosis', 'Checking event listeners...');
-        const eventCounts = {};
-        
-        [event_types.CHARACTER_IMPORTED, 
-         event_types.WORLDINFO_SETTINGS_UPDATED,
-         event_types.CHARACTER_EDITED].forEach(eventType => {
-            const count = eventSource.listenerCount(eventType);
-            if (count > 0) {
-                eventCounts[eventType] = count;
-                if (count > 3) {
-                    this.log('warning', 'Diagnosis', `  ⚠ ${eventType}: ${count} listeners (high)`);
-                }
-            }
-        });
-
-        // Recommendations
-        this.log('info', 'Diagnosis', '');
-        this.log('info', 'Diagnosis', '📋 Recommended Actions:');
-        this.log('info', 'Diagnosis', '1. Check browser console (F12) for errors');
-        this.log('info', 'Diagnosis', '2. Try disabling extensions one by one');
-        this.log('info', 'Diagnosis', '3. Import the character again');
-        this.log('info', 'Diagnosis', '4. Check if character card actually has WI data');
-        this.log('info', 'Diagnosis', '5. Try with a fresh character from internet');
+        this.log('info', 'Diagnosis', '📋 Try these steps:');
+        this.log('info', 'Diagnosis', '1. Check browser console (F12)');
+        this.log('info', 'Diagnosis', '2. Disable extensions one by one');
+        this.log('info', 'Diagnosis', '3. Re-import the character');
+        this.log('info', 'Diagnosis', '4. Verify card has WI data');
 
         this.updateStats();
     }
@@ -374,36 +352,21 @@ class WorldInfoDebugger {
     }
 
     async analyzeExtensions() {
-        this.log('info', 'Analysis', 'Starting deep extension analysis...');
+        this.log('info', 'Analysis', 'Analyzing extensions...');
 
-        // List all extensions with their settings
-        Object.entries(extension_settings).forEach(([name, settings]) => {
-            if (name === extensionName) return; // Skip self
+        Object.keys(extension_settings).forEach((name) => {
+            if (name === extensionName) return;
 
             const wiRelated = name.toLowerCase().includes('world') ||
                             name.toLowerCase().includes('lorebook') ||
                             name.toLowerCase().includes('import');
 
             if (wiRelated) {
-                this.log('warning', 'Analysis', `${name} - WI-related extension`);
-            }
-
-            // Check settings for WI-related keys
-            if (settings && typeof settings === 'object') {
-                const keys = Object.keys(settings);
-                const suspiciousKeys = keys.filter(key => 
-                    key.toLowerCase().includes('world') ||
-                    key.toLowerCase().includes('lorebook') ||
-                    key.toLowerCase().includes('import')
-                );
-
-                if (suspiciousKeys.length > 0) {
-                    this.log('info', 'Analysis', `  └─ Has WI settings: ${suspiciousKeys.join(', ')}`);
-                }
+                this.log('warning', 'Analysis', `⚠ ${name}`);
             }
         });
 
-        this.log('success', 'Analysis', 'Analysis complete - check logs above');
+        this.log('success', 'Analysis', '✓ Complete');
     }
 
     log(level, source, message) {
@@ -422,6 +385,11 @@ class WorldInfoDebugger {
 
         // Add to UI
         const logElement = $('#wi-debug-log');
+        if (logElement.length === 0) {
+            console.warn('[WI Debugger] Log element not found!');
+            return;
+        }
+
         const entryHtml = `
             <div class="log-entry ${level}">
                 <span class="log-timestamp">${timestamp}</span>
@@ -439,14 +407,14 @@ class WorldInfoDebugger {
             logElement.find('.log-entry:first').remove();
         }
 
-        // Also log to console for debugging
+        // Also console log
         console.log(`[WI-Debugger] [${source}] ${message}`);
     }
 
     clearLog() {
         this.logs = [];
         $('#wi-debug-log').empty();
-        this.log('info', 'System', 'Log cleared');
+        this.log('info', 'System', '✓ Log cleared');
     }
 
     exportLog() {
@@ -454,31 +422,25 @@ class WorldInfoDebugger {
             `[${entry.timestamp}] [${entry.level.toUpperCase()}] [${entry.source}] ${entry.message}`
         ).join('\n');
 
-        const header = `
-World Info Import Debugger Log
+        const header = `World Info Debugger Log
 Generated: ${new Date().toISOString()}
-Total Imports: ${this.importCount}
-Failed Imports: ${this.failCount}
-Active Hooks: ${Object.keys(this.originalFunctions).length}
-Extensions: ${Object.keys(extension_settings).length}
-
-${'='.repeat(80)}
+Imports: ${this.importCount} | Failed: ${this.failCount}
+Hooks: ${Object.keys(this.originalFunctions).length}
+${'='.repeat(60)}
 
 `;
 
-        const fullLog = header + logText;
-
-        const blob = new Blob([fullLog], { type: 'text/plain' });
+        const blob = new Blob([header + logText], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `wi-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+        a.download = `wi-debug-${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        this.log('success', 'Export', `Log exported: ${this.logs.length} entries`);
+        this.log('success', 'Export', `✓ Exported ${this.logs.length} entries`);
     }
 
     updateStats() {
@@ -493,10 +455,12 @@ ${'='.repeat(80)}
 
 // Initialize extension
 jQuery(async () => {
+    console.log('[WI Debugger] jQuery ready, starting initialization...');
+    
     const debugger = new WorldInfoDebugger();
     await debugger.init();
     
     // Export to window for console access
     window.wiDebugger = debugger;
-    console.log('World Info Debugger loaded. Access via: window.wiDebugger');
+    console.log('[WI Debugger] ✓ Available as window.wiDebugger');
 });
