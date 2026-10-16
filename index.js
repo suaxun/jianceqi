@@ -27,12 +27,47 @@ jQuery(async () => {
         });
     }
     
-    function getExtensionSettings() {
-        return window.extension_settings || 
-               window.extensionSettings || 
-               window.SillyTavern?.extensionSettings ||
-               {};
+// 获取扩展设置的兼容方法
+function getExtensionSettings() {
+    // 尝试多种可能的路径
+    return window.extension_settings || 
+           window.extensionSettings || 
+           window.SillyTavern?.extensionSettings ||
+           window.extensions?.settings ||
+           // 尝试从 localStorage 读取
+           (function() {
+               try {
+                   const stored = localStorage.getItem('extension_settings');
+                   return stored ? JSON.parse(stored) : {};
+               } catch (e) {
+                   return {};
+               }
+           })();
+}
+
+// 获取 context 的兼容方法
+function getContextCompat() {
+    if (window.getContext) {
+        return window.getContext();
     }
+    
+    // 尝试直接访问全局变量
+    if (window.characters && window.this_chid !== undefined) {
+        return {
+            characters: window.characters,
+            characterId: window.this_chid,
+            chat: window.chat
+        };
+    }
+    
+    // 尝试从 SillyTavern 对象获取
+    if (window.SillyTavern) {
+        return window.SillyTavern;
+    }
+    
+    return null;
+}
+
     
     function addLog(level, source, message) {
         const colors = {
@@ -110,6 +145,7 @@ jQuery(async () => {
                             <button id="wi-find-culprit" class="menu_button" style="background: #f44336;">Find Culprit</button>
                             <button id="wi-scan-scripts" class="menu_button" style="background: #9C27B0;">Scan Scripts</button>
 <button id="wi-refresh-scripts" class="menu_button" style="background: #9C27B0;">Refresh List</button>
+<button id="wi-list-everything" class="menu_button" style="background: #607D8B;">List Everything</button>
                         </div>
                     </div>
                 </div>
@@ -448,51 +484,73 @@ async function scanSlashRunnerScripts() {
         addLog('success', 'Export', 'Full report exported');
     });
     
-    $('#wi-test').on('click', () => {
-        addLog('info', 'Test', 'Testing current character...');
+$('#wi-test').on('click', () => {
+    addLog('info', 'Test', 'Testing current character...');
+    
+    const context = getContextCompat();
+    
+    if (!context) {
+        addLog('error', 'Test', 'Cannot access context - trying fallback methods');
         
-        if (!window.getContext) {
-            addLog('error', 'Test', 'getContext not available');
-            return;
-        }
-        
-        const context = window.getContext();
-        if (!context || context.characterId === undefined) {
-            addLog('warning', 'Test', 'No character selected');
-            return;
-        }
-        
-        const char = context.characters[context.characterId];
-        addLog('info', 'Test', `Character: ${char.name}`);
-        
-        fetch('/api/characters/get', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ avatar_url: char.avatar })
-        })
-        .then(r => r.json())
-        .then(data => {
-            const wi = data.data?.character_book || data.character_book;
-            if (wi && wi.entries) {
-                addLog('success', 'Test', `✓ Card has ${wi.entries.length} WI entries`);
-                
-                if (window.world_info && window.world_info.entries) {
-                    const loadedCount = Object.keys(window.world_info.entries).length;
-                    addLog('info', 'Test', `ST has ${loadedCount} entries loaded`);
-                    
-                    if (wi.entries.length > 0 && loadedCount === 0) {
-                        addLog('error', 'Test', `⚠️ Card has ${wi.entries.length} but NONE loaded!`);
-                        markSuspicious('Import Process', 'WI not loading into ST');
-                    }
-                }
-            } else {
-                addLog('info', 'Test', 'No character_book in card');
+        // 尝试直接从全局变量获取
+        if (window.characters && window.this_chid !== undefined) {
+            const chid = window.this_chid;
+            const char = window.characters[chid];
+            
+            if (char) {
+                addLog('success', 'Test', `Found character via globals: ${char.name}`);
+                testCharacterWI(char);
+                return;
             }
-        })
-        .catch(err => {
-            addLog('error', 'Test', `Failed: ${err.message}`);
-        });
+        }
+        
+        addLog('error', 'Test', 'No character data available');
+        return;
+    }
+    
+    if (context.characterId === undefined) {
+        addLog('warning', 'Test', 'No character selected');
+        return;
+    }
+    
+    const char = context.characters[context.characterId];
+    addLog('info', 'Test', `Character: ${char.name}`);
+    
+    testCharacterWI(char);
+});
+
+// 提取测试逻辑到单独函数
+function testCharacterWI(char) {
+    fetch('/api/characters/get', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ avatar_url: char.avatar })
+    })
+    .then(r => r.json())
+    .then(data => {
+        const wi = data.data?.character_book || data.character_book;
+        if (wi && wi.entries) {
+            addLog('success', 'Test', `✓ Card has ${wi.entries.length} WI entries`);
+            
+            // 检查实际加载的
+            if (window.world_info && window.world_info.entries) {
+                const loadedCount = Object.keys(window.world_info.entries).length;
+                addLog('info', 'Test', `ST loaded: ${loadedCount} entries`);
+                
+                if (wi.entries.length > 0 && loadedCount === 0) {
+                    addLog('error', 'Test', `⚠️ Card has ${wi.entries.length} but NONE loaded!`);
+                    markSuspicious('Import Process', 'WI not loading into ST');
+                }
+            }
+        } else {
+            addLog('info', 'Test', 'No character_book in card');
+        }
+    })
+    .catch(err => {
+        addLog('error', 'Test', `Failed: ${err.message}`);
     });
+}
+
     
     $('#wi-analyze').on('click', () => {
         analyzeExtensions(false);
@@ -509,6 +567,74 @@ async function scanSlashRunnerScripts() {
     await new Promise(resolve => setTimeout(resolve, 500));
     
     await scanSlashRunnerScripts();
+});
+$('#wi-list-everything').on('click', async () => {
+    addLog('info', 'List', '📋 Listing everything...');
+    addLog('info', 'List', '');
+    
+    // 1. 列出所有扩展（从 DOM）
+    addLog('info', 'List', '═══ EXTENSIONS (from DOM) ═══');
+    const extScripts = document.querySelectorAll('script[src*="/extensions/"]');
+    const extensionNames = new Set();
+    
+    extScripts.forEach(script => {
+        const src = script.getAttribute('src');
+        const match = src.match(/extensions\/(?:third-party\/)?([^\/]+)/);
+        if (match && match[1]) {
+            extensionNames.add(match[1]);
+        }
+    });
+    
+    if (extensionNames.size > 0) {
+        addLog('success', 'List', `Found ${extensionNames.size} extensions:`);
+        Array.from(extensionNames).sort().forEach((name, idx) => {
+            addLog('info', 'List', `${idx + 1}. ${name}`);
+        });
+    } else {
+        addLog('warning', 'List', 'No extensions found in DOM');
+    }
+    
+    // 2. 列出所有脚本（从 DOM）
+    addLog('info', 'List', '');
+    addLog('info', 'List', '═══ SCRIPTS (from DOM) ═══');
+    const scriptElements = document.querySelectorAll('[data-type="script"][data-script-id]');
+    
+    if (scriptElements.length > 0) {
+        addLog('success', 'List', `Found ${scriptElements.length} scripts:`);
+        scriptElements.forEach((element, idx) => {
+            const nameElement = element.querySelector('.w-0.grow');
+            const scriptName = nameElement ? nameElement.textContent.trim() : 'Unknown';
+            const toggleIcon = element.querySelector('i.fa-toggle-off, i.fa-toggle-on');
+            const isEnabled = toggleIcon && toggleIcon.classList.contains('fa-toggle-on');
+            
+            addLog('info', 'List', `${idx + 1}. ${scriptName} ${isEnabled ? '✓' : '✗'}`);
+        });
+    } else {
+        addLog('warning', 'List', 'No scripts found in DOM');
+    }
+    
+    // 3. 列出关键全局变量
+    addLog('info', 'List', '');
+    addLog('info', 'List', '═══ KEY GLOBALS ═══');
+    const keyGlobals = [
+        'getContext',
+        'extension_settings',
+        'importEmbeddedWorldInfo',
+        'importCharacter',
+        'world_info',
+        'characters',
+        'this_chid',
+        'SlashCommandParser'
+    ];
+    
+    keyGlobals.forEach(key => {
+        const exists = window[key] !== undefined;
+        const type = exists ? typeof window[key] : 'undefined';
+        addLog(exists ? 'success' : 'warning', 'List', `window.${key}: ${type}`);
+    });
+    
+    addLog('info', 'List', '');
+    addLog('success', 'List', '✓ Complete');
 });
 
     $('#wi-find-culprit').on('click', async () => {
@@ -598,21 +724,34 @@ async function scanSlashRunnerScripts() {
         }
     });
     
-    function analyzeExtensions(deep = false) {
-        addLog('info', 'Analysis', 'Analyzing extensions...');
+function analyzeExtensions(deep = false) {
+    addLog('info', 'Analysis', 'Analyzing extensions...');
+    
+    // 先尝试直接读取 DOM 中已加载的扩展脚本
+    addLog('info', 'Analysis', 'Scanning loaded extension scripts...');
+    const extScripts = document.querySelectorAll('script[src*="/extensions/"]');
+    
+    if (extScripts.length > 0) {
+        addLog('success', 'Analysis', `Found ${extScripts.length} extension scripts in DOM`);
         
-        const settings = getExtensionSettings();
-        const exts = Object.keys(settings);
+        const extensionNames = [];
+        extScripts.forEach(script => {
+            const src = script.getAttribute('src');
+            // 提取扩展名称：/extensions/third-party/名称/index.js
+            const match = src.match(/extensions\/(?:third-party\/)?([^\/]+)/);
+            if (match && match[1]) {
+                const extName = match[1];
+                if (!extensionNames.includes(extName)) {
+                    extensionNames.push(extName);
+                }
+            }
+        });
         
-        if (exts.length === 0) {
-            addLog('warning', 'Analysis', 'Cannot access extension_settings');
-            return;
-        }
+        $('#ext-count').text(extensionNames.length);
+        addLog('info', 'Analysis', `Detected ${extensionNames.length} unique extensions:`);
         
-        $('#ext-count').text(exts.length);
-        addLog('info', 'Analysis', `${exts.length} extensions installed`);
-        
-        const wiRelated = exts.filter(name => {
+        // 分析扩展名称
+        const wiRelated = extensionNames.filter(name => {
             const lower = name.toLowerCase();
             return lower.includes('world') || 
                    lower.includes('lorebook') || 
@@ -622,15 +761,53 @@ async function scanSlashRunnerScripts() {
         });
         
         if (wiRelated.length > 0) {
-            addLog('warning', 'Analysis', `WI-related (${wiRelated.length}):`);
+            addLog('warning', 'Analysis', `WI-related extensions (${wiRelated.length}):`);
             wiRelated.forEach(ext => {
                 addLog('warning', 'Analysis', `  • ${ext}`);
-                markSuspicious(ext, 'Name suggests WI functionality');
+                markSuspicious(ext, 'Extension name suggests WI functionality');
             });
         }
         
+        // 列出所有扩展
         if (deep) {
-            exts.forEach(extName => {
+            extensionNames.forEach((name, idx) => {
+                addLog('info', 'Analysis', `${idx + 1}. ${name}`);
+            });
+        }
+    } else {
+        addLog('warning', 'Analysis', 'No extension scripts found in DOM');
+    }
+    
+    // 尝试从 settings 读取
+    const settings = getExtensionSettings();
+    const settingsKeys = Object.keys(settings);
+    
+    if (settingsKeys.length > 0) {
+        addLog('success', 'Analysis', `Found ${settingsKeys.length} extensions in settings`);
+        $('#ext-count').text(settingsKeys.length);
+        
+        const wiRelated = settingsKeys.filter(name => {
+            const lower = name.toLowerCase();
+            return lower.includes('world') || 
+                   lower.includes('lorebook') || 
+                   lower.includes('import') ||
+                   lower.includes('character') ||
+                   lower.includes('book');
+        });
+        
+        if (wiRelated.length > 0) {
+            addLog('warning', 'Analysis', `WI-related in settings (${wiRelated.length}):`);
+            wiRelated.forEach(ext => {
+                addLog('warning', 'Analysis', `  • ${ext}`);
+                markSuspicious(ext, 'Settings suggest WI functionality');
+            });
+        }
+        
+        // Deep analysis
+        if (deep) {
+            addLog('info', 'Analysis', 'Deep analysis of extension settings...');
+            
+            settingsKeys.forEach(extName => {
                 const extSettings = settings[extName];
                 if (extSettings && typeof extSettings === 'object') {
                     const keys = Object.keys(extSettings);
@@ -638,19 +815,24 @@ async function scanSlashRunnerScripts() {
                         const lower = key.toLowerCase();
                         return lower.includes('world') || 
                                lower.includes('import') ||
-                               lower.includes('hook');
+                               lower.includes('hook') ||
+                               lower.includes('intercept');
                     });
                     
                     if (suspiciousKeys.length > 0) {
                         addLog('warning', 'Analysis', `${extName}: ${suspiciousKeys.join(', ')}`);
-                        markSuspicious(extName, `Settings: ${suspiciousKeys.join(', ')}`);
+                        markSuspicious(extName, `Suspicious settings: ${suspiciousKeys.join(', ')}`);
                     }
                 }
             });
         }
-        
-        addLog('success', 'Analysis', '✓ Complete');
+    } else {
+        addLog('warning', 'Analysis', 'Cannot access extension_settings');
     }
+    
+    addLog('success', 'Analysis', '✓ Complete');
+}
+
     
     function setupHooks() {
         addLog('info', 'Hook', 'Setting up hooks...');
