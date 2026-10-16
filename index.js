@@ -1,127 +1,15 @@
-(function() {
+// 使用 ST 的标准扩展模式
+jQuery(async () => {
     'use strict';
     
-    console.log('[WI Debugger] Loading...');
-    
     const extensionName = 'jianceqi';
+    const extensionFolderPath = `scripts/extensions/third-party/${extensionName}/`;
+    
+    console.log('[WI Debugger] Loading extension...');
+    
     let logs = [];
     let importCount = 0;
     let failCount = 0;
-    let isEnabled = true;
-    
-    // 等待 SillyTavern 完全加载
-    function waitForST() {
-        return new Promise((resolve) => {
-            const check = setInterval(() => {
-                if (window.SillyTavern && window.eventSource && window.extension_settings) {
-                    clearInterval(check);
-                    resolve();
-                }
-            }, 100);
-        });
-    }
-    
-    function createUI() {
-        const html = `
-            <div id="wi-debugger-panel" style="
-                background: #1a1a1a;
-                border: 1px solid #333;
-                border-radius: 8px;
-                padding: 15px;
-                margin: 10px 0;
-            ">
-                <h3 style="margin: 0 0 15px 0; color: #fff;">🔍 WI Import Debugger</h3>
-                
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
-                    <div style="background: #2a2a2a; padding: 10px; border-radius: 5px; text-align: center;">
-                        <div id="import-count" style="font-size: 24px; color: #4CAF50;">0</div>
-                        <div style="font-size: 11px; color: #999;">Total Imports</div>
-                    </div>
-                    <div style="background: #2a2a2a; padding: 10px; border-radius: 5px; text-align: center;">
-                        <div id="fail-count" style="font-size: 24px; color: #f44336;">0</div>
-                        <div style="font-size: 11px; color: #999;">Failed (0 entries)</div>
-                    </div>
-                    <div style="background: #2a2a2a; padding: 10px; border-radius: 5px; text-align: center;">
-                        <div id="ext-count" style="font-size: 24px; color: #2196F3;">-</div>
-                        <div style="font-size: 11px; color: #999;">Extensions</div>
-                    </div>
-                    <div style="background: #2a2a2a; padding: 10px; border-radius: 5px; text-align: center;">
-                        <div id="hook-count" style="font-size: 24px; color: #FF9800;">0</div>
-                        <div style="font-size: 11px; color: #999;">Hooks</div>
-                    </div>
-                </div>
-                
-                <div id="wi-log" style="
-                    background: #0a0a0a;
-                    border: 1px solid #333;
-                    border-radius: 5px;
-                    padding: 10px;
-                    max-height: 300px;
-                    overflow-y: auto;
-                    font-family: monospace;
-                    font-size: 12px;
-                    margin-bottom: 10px;
-                ">
-                    <div style="color: #4CAF50;">[System] Debugger ready</div>
-                </div>
-                
-                <div style="display: flex; gap: 10px;">
-                    <button id="wi-clear" class="menu_button">Clear</button>
-                    <button id="wi-export" class="menu_button">Export</button>
-                    <button id="wi-test" class="menu_button">Test Char</button>
-                    <button id="wi-analyze" class="menu_button">Analyze</button>
-                </div>
-            </div>
-        `;
-        
-        // 尝试找到扩展设置区域
-        const targets = [
-            document.getElementById('extensions_settings'),
-            document.getElementById('extensions_settings2'),
-            document.querySelector('.drawer-content')
-        ];
-        
-        for (const target of targets) {
-            if (target) {
-                target.insertAdjacentHTML('beforeend', html);
-                console.log('[WI Debugger] UI injected');
-                setupButtons();
-                return true;
-            }
-        }
-        
-        // 如果找不到，添加到 body
-        document.body.insertAdjacentHTML('beforeend', `
-            <div style="position: fixed; bottom: 20px; right: 20px; z-index: 10000; max-width: 500px;">
-                ${html}
-            </div>
-        `);
-        console.log('[WI Debugger] UI injected to body (fallback)');
-        setupButtons();
-        return true;
-    }
-    
-    function setupButtons() {
-        document.getElementById('wi-clear')?.addEventListener('click', () => {
-            logs = [];
-            document.getElementById('wi-log').innerHTML = '<div style="color: #4CAF50;">[System] Log cleared</div>';
-        });
-        
-        document.getElementById('wi-export')?.addEventListener('click', () => {
-            const text = logs.join('\n');
-            const blob = new Blob([text], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `wi-debug-${Date.now()}.txt`;
-            a.click();
-            URL.revokeObjectURL(url);
-            addLog('success', 'Export', 'Log exported');
-        });
-        
-        document.getElementById('wi-test')?.addEventListener('click', testCurrentChar);
-        document.getElementById('wi-analyze')?.addEventListener('click', analyzeExtensions);
-    }
     
     function addLog(level, source, message) {
         const colors = {
@@ -143,7 +31,7 @@
             logDiv.appendChild(entry);
             logDiv.scrollTop = logDiv.scrollHeight;
             
-            // Keep only last 100 entries
+            // Keep only last 100
             while (logDiv.children.length > 100) {
                 logDiv.removeChild(logDiv.firstChild);
             }
@@ -152,73 +40,74 @@
         console.log(`[WI Debugger] ${logText}`);
     }
     
-    function setupHooks() {
-        addLog('info', 'Hook', 'Setting up hooks...');
-        
-        // Hook importEmbeddedWorldInfo
-        if (window.importEmbeddedWorldInfo) {
-            const original = window.importEmbeddedWorldInfo;
-            window.importEmbeddedWorldInfo = async function(...args) {
-                const start = performance.now();
-                addLog('info', 'Import', 'importEmbeddedWorldInfo called');
-                
-                try {
-                    const result = await original.apply(this, args);
-                    const duration = (performance.now() - start).toFixed(2);
-                    
-                    importCount++;
-                    document.getElementById('import-count').textContent = importCount;
-                    
-                    if (result && result.entries !== undefined) {
-                        const count = Array.isArray(result.entries) ? result.entries.length : 0;
+    // 创建设置 HTML (参考 ST 的扩展设置模板)
+    const settingsHtml = `
+        <div class="wi-debugger-container">
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>🔍 WI Import Debugger</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <div style="background: var(--SmartThemeBlurTintColor); border: 1px solid var(--SmartThemeBorderColor); border-radius: 10px; padding: 15px;">
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
+                            <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; text-align: center;">
+                                <div id="import-count" style="font-size: 24px; font-weight: bold; color: #4CAF50;">0</div>
+                                <div style="font-size: 11px; color: #999;">Imports</div>
+                            </div>
+                            <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; text-align: center;">
+                                <div id="fail-count" style="font-size: 24px; font-weight: bold; color: #f44336;">0</div>
+                                <div style="font-size: 11px; color: #999;">Failed</div>
+                            </div>
+                            <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; text-align: center;">
+                                <div id="ext-count" style="font-size: 24px; font-weight: bold; color: #2196F3;">-</div>
+                                <div style="font-size: 11px; color: #999;">Extensions</div>
+                            </div>
+                            <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; text-align: center;">
+                                <div id="hook-count" style="font-size: 24px; font-weight: bold; color: #FF9800;">0</div>
+                                <div style="font-size: 11px; color: #999;">Hooks</div>
+                            </div>
+                        </div>
                         
-                        if (count === 0) {
-                            failCount++;
-                            document.getElementById('fail-count').textContent = failCount;
-                            addLog('error', 'Import', `⚠️ RETURNED 0 ENTRIES! (${duration}ms)`);
-                            diagnose();
-                        } else {
-                            addLog('success', 'Import', `✓ Imported ${count} entries (${duration}ms)`);
-                        }
-                    } else {
-                        addLog('warning', 'Import', `Completed but no entries info (${duration}ms)`);
-                    }
-                    
-                    return result;
-                } catch (error) {
-                    addLog('error', 'Import', `Failed: ${error.message}`);
-                    throw error;
-                }
-            };
-            addLog('success', 'Hook', '✓ Hooked importEmbeddedWorldInfo');
-            document.getElementById('hook-count').textContent = '1';
-        } else {
-            addLog('warning', 'Hook', 'importEmbeddedWorldInfo not found');
-        }
-        
-        // Hook fetch
-        const originalFetch = window.fetch;
-        window.fetch = async function(url, options) {
-            if (typeof url === 'string' && (url.includes('worldinfo') || url.includes('import') || url.includes('character'))) {
-                const method = options?.method || 'GET';
-                addLog('info', 'API', `${method} ${url.split('/').pop()}`);
-            }
-            return originalFetch(url, options);
-        };
-        addLog('success', 'Hook', '✓ Hooked fetch');
-    }
+                        <div id="wi-log" style="background: rgba(0,0,0,0.5); border: 1px solid var(--SmartThemeBorderColor); border-radius: 5px; padding: 10px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; margin-bottom: 10px;">
+                            <div style="color: #4CAF50;">[System] Waiting for initialization...</div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                            <button id="wi-clear" class="menu_button">Clear Log</button>
+                            <button id="wi-export" class="menu_button">Export Log</button>
+                            <button id="wi-test" class="menu_button">Test Current Char</button>
+                            <button id="wi-analyze" class="menu_button">Analyze Extensions</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
     
-    function diagnose() {
-        addLog('error', 'Diagnosis', '═════════════════════');
-        addLog('error', 'Diagnosis', '⚠️ IMPORT FAILED');
-        addLog('error', 'Diagnosis', '═════════════════════');
-        addLog('info', 'Diagnosis', 'Check:');
-        addLog('info', 'Diagnosis', '1. Browser console (F12)');
-        addLog('info', 'Diagnosis', '2. Character card has WI?');
-        addLog('info', 'Diagnosis', '3. Disable extensions one by one');
-    }
+    // 注入到扩展设置面板 (参考其他扩展的做法)
+    $('#extensions_settings2').append(settingsHtml);
+    console.log('[WI Debugger] UI injected into extensions panel');
     
-    function testCurrentChar() {
+    // 绑定按钮事件
+    $('#wi-clear').on('click', () => {
+        logs = [];
+        $('#wi-log').html('<div style="color: #4CAF50;">[System] Log cleared</div>');
+    });
+    
+    $('#wi-export').on('click', () => {
+        const text = logs.join('\n');
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `wi-debug-${Date.now()}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+        addLog('success', 'Export', 'Log exported');
+    });
+    
+    $('#wi-test').on('click', () => {
         addLog('info', 'Test', 'Testing current character...');
         
         if (!window.getContext) {
@@ -235,7 +124,6 @@
         const char = context.characters[context.characterId];
         addLog('info', 'Test', `Character: ${char.name}`);
         
-        // Try to fetch character data
         fetch('/api/characters/get', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -247,15 +135,15 @@
             if (wi && wi.entries) {
                 addLog('success', 'Test', `Card has ${wi.entries.length} WI entries`);
             } else {
-                addLog('info', 'Test', 'No character_book in card');
+                addLog('info', 'Test', 'No character_book found in card');
             }
         })
         .catch(err => {
             addLog('error', 'Test', `Failed: ${err.message}`);
         });
-    }
+    });
     
-    function analyzeExtensions() {
+    $('#wi-analyze').on('click', () => {
         addLog('info', 'Analysis', 'Analyzing extensions...');
         
         if (!window.extension_settings) {
@@ -264,9 +152,9 @@
         }
         
         const exts = Object.keys(window.extension_settings);
-        document.getElementById('ext-count').textContent = exts.length;
+        $('#ext-count').text(exts.length);
         
-        addLog('info', 'Analysis', `Found ${exts.length} extensions`);
+        addLog('info', 'Analysis', `Found ${exts.length} extensions total`);
         
         const wiRelated = exts.filter(name => {
             const lower = name.toLowerCase();
@@ -274,33 +162,117 @@
         });
         
         if (wiRelated.length > 0) {
-            addLog('warning', 'Analysis', `WI-related: ${wiRelated.join(', ')}`);
+            addLog('warning', 'Analysis', `WI-related extensions:`);
+            wiRelated.forEach(ext => addLog('warning', 'Analysis', `  - ${ext}`));
+        } else {
+            addLog('info', 'Analysis', 'No WI-related extensions found');
         }
         
-        addLog('success', 'Analysis', '✓ Complete');
+        addLog('success', 'Analysis', '✓ Analysis complete');
+    });
+    
+    // Setup hooks
+    function setupHooks() {
+        addLog('info', 'Hook', 'Setting up function hooks...');
+        let hookCount = 0;
+        
+        // Hook importEmbeddedWorldInfo
+        if (window.importEmbeddedWorldInfo) {
+            const original = window.importEmbeddedWorldInfo;
+            window.importEmbeddedWorldInfo = async function(...args) {
+                const start = performance.now();
+                addLog('info', 'Import', '⚡ importEmbeddedWorldInfo called');
+                
+                try {
+                    const result = await original.apply(this, args);
+                    const duration = (performance.now() - start).toFixed(2);
+                    
+                    importCount++;
+                    $('#import-count').text(importCount);
+                    
+                    if (result && result.entries !== undefined) {
+                        const count = Array.isArray(result.entries) ? result.entries.length : 0;
+                        
+                        if (count === 0) {
+                            failCount++;
+                            $('#fail-count').text(failCount);
+                            addLog('error', 'Import', `⚠️ RETURNED 0 ENTRIES! Duration: ${duration}ms`);
+                            diagnose();
+                        } else {
+                            addLog('success', 'Import', `✓ Imported ${count} entries (${duration}ms)`);
+                        }
+                    } else {
+                        addLog('warning', 'Import', `Completed but no entry count available (${duration}ms)`);
+                    }
+                    
+                    return result;
+                } catch (error) {
+                    addLog('error', 'Import', `✗ Failed: ${error.message}`);
+                    console.error('[WI Debugger] Import error:', error);
+                    throw error;
+                }
+            };
+            addLog('success', 'Hook', '✓ Hooked importEmbeddedWorldInfo');
+            hookCount++;
+        } else {
+            addLog('warning', 'Hook', '⚠️ importEmbeddedWorldInfo not found');
+        }
+        
+        // Hook fetch for API monitoring
+        const originalFetch = window.fetch;
+        window.fetch = async function(url, options) {
+            if (typeof url === 'string' && (url.includes('worldinfo') || url.includes('import') || url.includes('character'))) {
+                const method = options?.method || 'GET';
+                const endpoint = url.split('/').pop();
+                addLog('info', 'API', `${method} /${endpoint}`);
+            }
+            return originalFetch(url, options);
+        };
+        addLog('success', 'Hook', '✓ Hooked fetch()');
+        hookCount++;
+        
+        $('#hook-count').text(hookCount);
+    }
+    
+    function diagnose() {
+        addLog('error', 'Diagnosis', '═══════════════════════════');
+        addLog('error', 'Diagnosis', '⚠️ IMPORT FAILURE DETECTED');
+        addLog('error', 'Diagnosis', '═══════════════════════════');
+        addLog('info', 'Diagnosis', '');
+        addLog('info', 'Diagnosis', '📋 Troubleshooting steps:');
+        addLog('info', 'Diagnosis', '1. Open browser console (F12) and check for errors');
+        addLog('info', 'Diagnosis', '2. Verify the character card actually contains WI data');
+        addLog('info', 'Diagnosis', '3. Try disabling extensions one by one');
+        addLog('info', 'Diagnosis', '4. Re-import the character after disabling extensions');
+        addLog('info', 'Diagnosis', '5. Check the "Analyze Extensions" button results');
+        addLog('info', 'Diagnosis', '');
+        
+        // Auto-run analysis
+        setTimeout(() => {
+            $('#wi-analyze').click();
+        }, 500);
     }
     
     // 初始化
-    waitForST().then(() => {
-        console.log('[WI Debugger] SillyTavern ready, initializing...');
-        
-        if (createUI()) {
-            setupHooks();
-            
-            const extCount = window.extension_settings ? Object.keys(window.extension_settings).length : 0;
-            document.getElementById('ext-count').textContent = extCount;
-            
-            addLog('success', 'System', '✓ Debugger initialized');
-            console.log('[WI Debugger] ✓ Ready');
-        }
-    });
+    setupHooks();
     
-    // 导出到全局
+    if (window.extension_settings) {
+        const extCount = Object.keys(window.extension_settings).length;
+        $('#ext-count').text(extCount);
+    }
+    
+    addLog('success', 'System', '✓ WI Import Debugger initialized');
+    console.log('[WI Debugger] ✓ Extension loaded successfully');
+    
+    // 导出到全局供控制台调用
     window.wiDebugger = {
         addLog,
-        testCurrentChar,
-        analyzeExtensions,
-        getLogs: () => logs
+        logs,
+        clear: () => $('#wi-clear').click(),
+        export: () => $('#wi-export').click(),
+        test: () => $('#wi-test').click(),
+        analyze: () => $('#wi-analyze').click()
     };
     
-})();
+    console.log('[WI Debugger] Access via: window.wiDebugger');
+});
