@@ -834,91 +834,70 @@ function analyzeExtensions(deep = false) {
 }
 
     
-    function setupHooks() {
-        addLog('info', 'Hook', 'Setting up hooks...');
-        let hookCount = 0;
-        
-        if (window.importEmbeddedWorldInfo) {
-            const original = window.importEmbeddedWorldInfo;
-            window.importEmbeddedWorldInfo = async function(...args) {
-                const start = performance.now();
-                const stack = new Error().stack;
-                
-                addLog('info', 'Import', '⚡ importEmbeddedWorldInfo called');
-                
-                try {
-                    const result = await original.apply(this, args);
-                    const duration = (performance.now() - start).toFixed(2);
-                    
-                    importCount++;
-                    $('#import-count').text(importCount);
-                    
-                    if (result && result.entries !== undefined) {
-                        const count = Array.isArray(result.entries) ? result.entries.length : 0;
-                        
-                        if (count === 0) {
-                            failCount++;
-                            $('#fail-count').text(failCount);
-                            addLog('error', 'Import', `⚠️ RETURNED 0 ENTRIES! (${duration}ms)`);
-                            // 自动扫描脚本
-addLog('info', 'Import', 'Auto-scanning scripts for analysis...');
-setTimeout(() => {
-    scanSlashRunnerScripts();
-}, 500);
+function setupHooks() {
+    addLog('info', 'Hook', 'Installing fetch interceptor...');
 
-                            // 分析调用栈
-                            const lines = stack.split('\n');
-                            
-                            // 查找扩展
-                            const extPaths = lines.filter(line => line.includes('/extensions/'));
-                            if (extPaths.length > 0) {
-                                addLog('info', 'Import', 'Extensions in stack:');
-                                extPaths.forEach(line => {
-                                    const match = line.match(/extensions\/(?:third-party\/)?([^\/\?]+)/);
-                                    if (match && match[1] !== extensionName) {
-                                        addLog('warning', 'Import', `  • ${match[1]}`);
-                                        markSuspicious(match[1], 'In import call stack');
-                                    }
-                                });
-                            }
-                            
-                            // 查找脚本
-                            const scriptPaths = lines.filter(line => 
-                                line.includes('JsSlashCommands') || 
-                                line.includes('/scripts/') ||
-                                line.includes('.st')
-                            );
-                            if (scriptPaths.length > 0) {
-                                addLog('info', 'Import', 'Scripts in stack:');
-                                scriptPaths.forEach(line => {
-                                    const match = line.match(/([^\/]+\.(?:js|st))/);
-                                    if (match) {
-                                        addLog('warning', 'Import', `  • ${match[1]}`);
-                                        markSuspiciousScript(match[1], 'In import call stack');
-                                    }
-                                });
-                            }
-                            
-                            diagnose();
-                        } else {
-                            addLog('success', 'Import', `✓ ${count} entries (${duration}ms)`);
-                        }
-                    }
-                    
-                    return result;
-                } catch (error) {
-                    addLog('error', 'Import', `✗ ${error.message}`);
-                    throw error;
-                }
-            };
-            addLog('success', 'Hook', '✓ Hooked importEmbeddedWorldInfo');
-            hookCount++;
-        } else {
-            addLog('warning', 'Hook', '⚠️ importEmbeddedWorldInfo not found');
+    const origFetch = window.fetch;
+    let importSession = null;
+
+    window.fetch = async function(url, options) {
+        let bodyText = '';
+        try { bodyText = options?.body ? String(options.body).slice(0,2000) : ''; } catch(e){}
+
+        // 1. 抓角色卡导入
+        if (typeof url === 'string' && url.includes('/api/characters/import')) {
+            importSession = { id: Date.now(), start: performance.now() };
+            addLog('error', 'IMPORT-START', `════ 开始导入 session=${importSession.id} ════`);
+            addLog('info', 'IMPORT', `URL: ${url}`);
         }
-        
-        $('#hook-count').text(hookCount);
+
+        const resp = await origFetch(url, options);
+
+        try {
+            // 2. 角色导入返回了什么文件名
+            if (typeof url === 'string' && url.includes('/api/characters/import') && resp.ok) {
+                const clone = resp.clone();
+                const data = await clone.json().catch(()=>null);
+                addLog('success', 'IMPORT', `import返回: ${JSON.stringify(data).slice(0,500)}`);
+                if (importSession) importSession.file = data?.file_name;
+            }
+
+            // 3. 读卡，看卡里到底有多少 character_book.entries
+            if (typeof url === 'string' && url.includes('/api/characters/get') && resp.ok) {
+                const clone = resp.clone();
+                const data = await clone.json().catch(()=>null);
+                const book = data?.data?.character_book || data?.character_book;
+                const n = Array.isArray(book?.entries) ? book.entries.length : -1;
+                addLog(n===0?'error':'success', 'CARD', `卡内 character_book.entries = ${n}`);
+                if (n===0 && importSession) {
+                    addLog('error', 'CARD', `卡本身就是0条，那第二次导入也不该正常 → 说明问题在“建世界书”那一步`);
+                }
+            }
+
+            // 4. 抓世界书相关写入
+            if (typeof url === 'string' && /worldinfo|lorebook|world-info/i.test(url)) {
+                addLog('warning', 'WI-API', `${options?.method||'GET'} ${url} → ${resp.status}`);
+                if ((options?.method||'').toUpperCase() !== 'GET' && resp.ok) {
+                    const clone = resp.clone();
+                    const txt = await clone.text().catch(()=> '');
+                    addLog('info', 'WI-API', `返回前300字: ${txt.slice(0,300)}`);
+                }
+            }
+        } catch(e){}
+
+        return resp;
+    };
+
+    // 5. 抓 popup，就是你说的 popup-content
+    if (window.Popup) {
+        const origShow = window.Popup.show.text;
+        // 不同版本 API 不一样，这里做兼容，只记录调用
+        addLog('info', 'Hook', 'Popup hook 需要按你的版本调，先靠 fetch + console 也够');
     }
+
+    addLog('success', 'Hook', '✓ fetch 拦截已安装，现在去复现一次导入');
+}
+
     
     function diagnose() {
         addLog('error', 'Diagnosis', '═══════════════════════════');
