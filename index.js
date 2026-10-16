@@ -180,79 +180,182 @@ jQuery(async () => {
         showSuspicious();
     }
     
-    // 扫描 JS-Slash-Runner 脚本
-    async function scanSlashRunnerScripts() {
-        addLog('info', 'Scripts', '🔍 Scanning JS-Slash-Runner scripts...');
+ // 扫描 JS-Slash-Runner 脚本
+async function scanSlashRunnerScripts() {
+    addLog('info', 'Scripts', '🔍 Scanning JS-Slash-Runner scripts...');
+    
+    let foundScripts = 0;
+    
+    try {
+        // 方法1: 尝试通过 API 获取脚本列表
+        const response = await fetch('/api/files/get', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                path: 'data/default-user/scripts'
+            })
+        });
         
-        try {
-            // 尝试读取脚本列表
-            const response = await fetch('/scripts/extensions/third-party/SillyTavern-JsSlashCommands/scripts', {
-                method: 'GET'
-            });
-            
-            if (response.ok) {
-                const scripts = await response.json();
-                if (Array.isArray(scripts)) {
-                    $('#script-count').text(scripts.length);
-                    addLog('success', 'Scripts', `Found ${scripts.length} STscripts in JS-Slash-Runner`);
-                    
-                    // 分析每个脚本
-                    const wiRelated = scripts.filter(script => {
-                        const lower = script.toLowerCase();
-                        return lower.includes('world') || 
-                               lower.includes('lorebook') ||
-                               lower.includes('import') ||
-                               lower.includes('character') ||
-                               lower.includes('book') ||
-                               lower.includes('wi');
+        if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data)) {
+                foundScripts = data.length;
+                $('#script-count').text(foundScripts);
+                addLog('success', 'Scripts', `Found ${foundScripts} script files via API`);
+                
+                // 分析脚本名称
+                const wiRelated = data.filter(script => {
+                    const lower = script.toLowerCase();
+                    return lower.includes('world') || 
+                           lower.includes('lorebook') ||
+                           lower.includes('import') ||
+                           lower.includes('character') ||
+                           lower.includes('book') ||
+                           lower.includes('wi');
+                });
+                
+                if (wiRelated.length > 0) {
+                    addLog('warning', 'Scripts', `Found ${wiRelated.length} potentially WI-related scripts:`);
+                    wiRelated.forEach(script => {
+                        addLog('warning', 'Scripts', `  • ${script}`);
+                        markSuspiciousScript(script, 'Script name suggests WI functionality');
                     });
-                    
-                    if (wiRelated.length > 0) {
-                        addLog('warning', 'Scripts', `Found ${wiRelated.length} WI-related scripts:`);
-                        wiRelated.forEach(script => {
-                            addLog('warning', 'Scripts', `  • ${script}`);
-                            markSuspiciousScript(script, 'Script name suggests WI functionality');
-                        });
-                    }
-                    
-                    return scripts;
+                } else {
+                    addLog('info', 'Scripts', 'No obviously WI-related script names found');
                 }
-            } else {
-                addLog('warning', 'Scripts', 'Could not access script list via API');
             }
-        } catch (error) {
-            addLog('warning', 'Scripts', `API error: ${error.message}`);
         }
+    } catch (error) {
+        addLog('warning', 'Scripts', `API method failed: ${error.message}`);
+    }
+    
+    // 方法2: 检查已注册的 slash commands
+    if (window.SlashCommandParser && window.SlashCommandParser.commands) {
+        const commands = Object.keys(window.SlashCommandParser.commands);
         
-        // 备选方案：检查全局注册的命令
-        if (window.SlashCommandParser && window.SlashCommandParser.commands) {
-            const commands = Object.keys(window.SlashCommandParser.commands);
-            const wiCommands = commands.filter(cmd => {
+        // 过滤出可能由脚本注册的命令
+        const scriptCommands = commands.filter(cmd => {
+            // 排除内置命令
+            const builtIn = ['help', 'sendas', 'sys', 'continue', 'impersonate'];
+            return !builtIn.includes(cmd);
+        });
+        
+        if (scriptCommands.length > 0) {
+            addLog('info', 'Scripts', `Found ${scriptCommands.length} custom slash commands`);
+            $('#script-count').text(scriptCommands.length);
+            
+            // 查找 WI 相关命令
+            const wiCommands = scriptCommands.filter(cmd => {
                 const lower = cmd.toLowerCase();
                 return lower.includes('world') || 
                        lower.includes('lorebook') ||
                        lower.includes('import') ||
                        lower.includes('wi') ||
-                       lower.includes('book');
+                       lower.includes('book') ||
+                       lower.includes('lore');
             });
             
             if (wiCommands.length > 0) {
-                addLog('warning', 'Scripts', `Found ${wiCommands.length} WI-related slash commands:`);
+                addLog('warning', 'Scripts', `Found ${wiCommands.length} WI-related commands:`);
                 wiCommands.forEach(cmd => {
                     addLog('warning', 'Scripts', `  • /${cmd}`);
-                    markSuspiciousScript(`Command: /${cmd}`, 'Slash command related to WI');
+                    markSuspiciousScript(`Command: /${cmd}`, 'Command name suggests WI functionality');
+                    
+                    // 尝试获取命令详情
+                    try {
+                        const cmdObj = window.SlashCommandParser.commands[cmd];
+                        if (cmdObj && cmdObj.helpString) {
+                            addLog('info', 'Scripts', `    Help: ${cmdObj.helpString}`);
+                        }
+                    } catch (e) {
+                        // 忽略错误
+                    }
                 });
             }
-            
-            $('#script-count').text(commands.length);
-            addLog('info', 'Scripts', `Total slash commands registered: ${commands.length}`);
+        }
+    }
+    
+    // 方法3: 检查 JS-Slash-Runner 扩展设置
+    const settings = getExtensionSettings();
+    const jsSlashSettings = settings['SillyTavern-JsSlashCommands'] || 
+                           settings['JsSlashCommands'] ||
+                           settings['third-party/SillyTavern-JsSlashCommands'];
+    
+    if (jsSlashSettings) {
+        addLog('success', 'Scripts', 'Found JS-Slash-Runner extension settings');
+        
+        // 检查设置中是否有脚本列表
+        if (jsSlashSettings.scripts && Array.isArray(jsSlashSettings.scripts)) {
+            const scriptList = jsSlashSettings.scripts;
+            $('#script-count').text(scriptList.length);
+            addLog('info', 'Scripts', `Extension settings shows ${scriptList.length} scripts`);
         }
         
-        // 检查是否有脚本修改了关键函数
-        checkScriptHooks();
-        
-        addLog('success', 'Scripts', '✓ Script scan complete');
+        // 检查是否有自动执行的脚本
+        if (jsSlashSettings.autoExecute || jsSlashSettings.onStart) {
+            addLog('warning', 'Scripts', '⚠️ Extension has auto-execute scripts configured!');
+            markSuspiciousScript('JS-Slash-Runner', 'Has auto-execute scripts');
+        }
     }
+    
+    // 方法4: 检查全局作用域中脚本留下的痕迹
+    addLog('info', 'Scripts', 'Checking for script traces in global scope...');
+    const globalKeys = Object.keys(window);
+    
+    // 查找可能由脚本创建的全局变量
+    const scriptGlobals = globalKeys.filter(key => {
+        return (key.startsWith('script_') || 
+               key.startsWith('custom_') ||
+               key.startsWith('st_')) &&
+               (key.toLowerCase().includes('world') ||
+                key.toLowerCase().includes('import') ||
+                key.toLowerCase().includes('book'));
+    });
+    
+    if (scriptGlobals.length > 0) {
+        addLog('warning', 'Scripts', `Found ${scriptGlobals.length} script-related globals:`);
+        scriptGlobals.forEach(key => {
+            addLog('warning', 'Scripts', `  • ${key}`);
+            markSuspiciousScript(`Global: ${key}`, 'Script created global variable');
+        });
+    }
+    
+    // 方法5: 检查是否有脚本修改了原型链
+    addLog('info', 'Scripts', 'Checking for prototype modifications...');
+    const prototypeChecks = [
+        { obj: Array, name: 'Array' },
+        { obj: String, name: 'String' },
+        { obj: Object, name: 'Object' }
+    ];
+    
+    prototypeChecks.forEach(({ obj, name }) => {
+        const proto = obj.prototype;
+        const keys = Object.getOwnPropertyNames(proto);
+        
+        // 检查是否有非标准方法
+        const customMethods = keys.filter(key => {
+            return typeof proto[key] === 'function' && 
+                   !['constructor', 'toString', 'valueOf'].includes(key) &&
+                   (key.includes('world') || key.includes('import') || key.includes('book'));
+        });
+        
+        if (customMethods.length > 0) {
+            addLog('warning', 'Scripts', `${name}.prototype modified: ${customMethods.join(', ')}`);
+            markSuspiciousScript('Prototype Modification', `Modified ${name}.prototype`);
+        }
+    });
+    
+    // 检查关键函数是否被脚本修改
+    checkScriptHooks();
+    
+    if (foundScripts === 0 && $('#script-count').text() === '-') {
+        addLog('warning', 'Scripts', 'Could not determine script count');
+        $('#script-count').text('?');
+    }
+    
+    addLog('success', 'Scripts', '✓ Script scan complete');
+}
+
     
     function checkScriptHooks() {
         addLog('info', 'Scripts', 'Checking for script-modified functions...');
@@ -675,7 +778,38 @@ jQuery(async () => {
     
     addLog('success', 'System', '✓ Debugger ready');
     console.log('[WI Debugger] ✓ Loaded');
+    // 监控 STscript 执行
+function monitorScriptExecution() {
+    addLog('info', 'Monitor', 'Starting script execution monitor...');
     
+    // Hook executeSlashCommands
+    if (window.executeSlashCommands || window.executeSlashCommandsOnChatInput) {
+        const originalExecute = window.executeSlashCommands || window.executeSlashCommandsOnChatInput;
+        
+        window.executeSlashCommandsOnChatInput = window.executeSlashCommands = async function(text, ...args) {
+            // 检查命令是否与 WI 相关
+            const lower = text.toLowerCase();
+            if (lower.includes('world') || 
+                lower.includes('lorebook') ||
+                lower.includes('import') ||
+                lower.includes('book') ||
+                lower.includes('/wi')) {
+                addLog('warning', 'Monitor', `STscript command executed: ${text.substring(0, 100)}`);
+                markSuspiciousScript('Live Execution', `Executed: ${text.substring(0, 50)}`);
+            }
+            
+            return originalExecute.call(this, text, ...args);
+        };
+        
+        addLog('success', 'Monitor', '✓ Monitoring STscript execution');
+    }
+}
+
+// 在 setupHooks() 后面调用
+setTimeout(() => {
+    monitorScriptExecution();
+}, 2000);
+
     window.wiDebugger = {
         logs,
         suspicious: suspiciousExtensions,
