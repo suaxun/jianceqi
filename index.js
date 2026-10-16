@@ -8,8 +8,33 @@ jQuery(async () => {
     let logs = [];
     let importCount = 0;
     let failCount = 0;
-    let suspiciousExtensions = new Map(); // 记录可疑扩展及其行为
-    let callStack = []; // 记录函数调用栈
+    let suspiciousExtensions = new Map();
+    let callStack = [];
+    
+    // 等待 SillyTavern API 就绪
+    function waitForAPI() {
+        return new Promise((resolve) => {
+            const check = () => {
+                // 检查多个可能的 API 入口
+                if ((window.extension_settings || window.extensionSettings) && 
+                    window.eventSource && 
+                    window.getContext) {
+                    resolve();
+                } else {
+                    setTimeout(check, 100);
+                }
+            };
+            check();
+        });
+    }
+    
+    // 获取扩展设置的兼容方法
+    function getExtensionSettings() {
+        return window.extension_settings || 
+               window.extensionSettings || 
+               window.SillyTavern?.extensionSettings ||
+               {};
+    }
     
     function addLog(level, source, message) {
         const colors = {
@@ -39,7 +64,6 @@ jQuery(async () => {
         console.log(`[WI Debugger] ${logText}`);
     }
     
-    // 创建设置 HTML
     const settingsHtml = `
         <div class="wi-debugger-container">
             <div class="inline-drawer">
@@ -50,7 +74,6 @@ jQuery(async () => {
                 <div class="inline-drawer-content">
                     <div style="background: var(--SmartThemeBlurTintColor); border: 1px solid var(--SmartThemeBorderColor); border-radius: 10px; padding: 15px;">
                         
-                        <!-- 统计面板 -->
                         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
                             <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; text-align: center;">
                                 <div id="import-count" style="font-size: 24px; font-weight: bold; color: #4CAF50;">0</div>
@@ -70,24 +93,22 @@ jQuery(async () => {
                             </div>
                         </div>
                         
-                        <!-- 可疑扩展列表 -->
                         <div id="suspicious-panel" style="background: rgba(255,0,0,0.1); border: 1px solid #f44336; border-radius: 5px; padding: 10px; margin-bottom: 10px; display: none;">
                             <div style="color: #f44336; font-weight: bold; margin-bottom: 5px;">⚠️ 可疑扩展/脚本:</div>
                             <div id="suspicious-list" style="font-size: 12px; color: #fff;"></div>
                         </div>
                         
-                        <!-- 日志面板 -->
                         <div id="wi-log" style="background: rgba(0,0,0,0.5); border: 1px solid var(--SmartThemeBorderColor); border-radius: 5px; padding: 10px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; margin-bottom: 10px;">
                             <div style="color: #4CAF50;">[System] Waiting for initialization...</div>
                         </div>
                         
-                        <!-- 按钮组 -->
                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                             <button id="wi-clear" class="menu_button">Clear Log</button>
                             <button id="wi-export" class="menu_button">Export Report</button>
                             <button id="wi-test" class="menu_button">Test Current Char</button>
                             <button id="wi-analyze" class="menu_button">Deep Analysis</button>
                             <button id="wi-find-culprit" class="menu_button" style="background: #f44336;">Find Culprit</button>
+                            <button id="wi-list-all" class="menu_button">List All Extensions</button>
                         </div>
                     </div>
                 </div>
@@ -98,7 +119,6 @@ jQuery(async () => {
     $('#extensions_settings2').append(settingsHtml);
     console.log('[WI Debugger] UI injected');
     
-    // 显示可疑扩展
     function showSuspicious() {
         if (suspiciousExtensions.size === 0) {
             $('#suspicious-panel').hide();
@@ -119,7 +139,6 @@ jQuery(async () => {
         $('#suspicious-panel').show();
     }
     
-    // 标记可疑扩展
     function markSuspicious(extensionName, reason) {
         if (!suspiciousExtensions.has(extensionName)) {
             suspiciousExtensions.set(extensionName, []);
@@ -128,7 +147,6 @@ jQuery(async () => {
         showSuspicious();
     }
     
-    // 绑定按钮
     $('#wi-clear').on('click', () => {
         logs = [];
         suspiciousExtensions.clear();
@@ -144,7 +162,9 @@ jQuery(async () => {
         
         report += `Total Imports: ${importCount}\n`;
         report += `Failed Imports: ${failCount}\n`;
-        report += `Extensions: ${Object.keys(window.extension_settings || {}).length}\n\n`;
+        
+        const settings = getExtensionSettings();
+        report += `Extensions: ${Object.keys(settings).length}\n\n`;
         
         if (suspiciousExtensions.size > 0) {
             report += '⚠️ SUSPICIOUS EXTENSIONS/SCRIPTS:\n';
@@ -158,6 +178,11 @@ jQuery(async () => {
             report += '\n';
         }
         
+        report += '\n═══ INSTALLED EXTENSIONS ═══\n';
+        Object.keys(settings).forEach((ext, idx) => {
+            report += `${idx + 1}. ${ext}\n`;
+        });
+        
         report += '\n═══════════════════════════════════════\n';
         report += 'DETAILED LOG:\n';
         report += '═══════════════════════════════════════\n\n';
@@ -170,7 +195,7 @@ jQuery(async () => {
         a.download = `wi-debug-report-${Date.now()}.txt`;
         a.click();
         URL.revokeObjectURL(url);
-        addLog('success', 'Export', 'Report exported with suspicious extensions list');
+        addLog('success', 'Export', 'Report exported');
     });
     
     $('#wi-test').on('click', () => {
@@ -199,19 +224,20 @@ jQuery(async () => {
         .then(data => {
             const wi = data.data?.character_book || data.character_book;
             if (wi && wi.entries) {
-                addLog('success', 'Test', `Card has ${wi.entries.length} WI entries`);
+                addLog('success', 'Test', `✓ Card has ${wi.entries.length} WI entries`);
                 
-                // 检查当前加载的 WI
+                // 检查实际加载的
                 if (window.world_info && window.world_info.entries) {
                     const loadedCount = Object.keys(window.world_info.entries).length;
-                    addLog('info', 'Test', `Currently loaded: ${loadedCount} WI entries`);
+                    addLog('info', 'Test', `Currently loaded in ST: ${loadedCount} entries`);
                     
-                    if (wi.entries.length !== loadedCount) {
-                        addLog('error', 'Test', `⚠️ MISMATCH! Card has ${wi.entries.length} but only ${loadedCount} loaded!`);
+                    if (wi.entries.length > 0 && loadedCount === 0) {
+                        addLog('error', 'Test', `⚠️ PROBLEM! Card has ${wi.entries.length} entries but NONE loaded!`);
+                        markSuspicious('Import Process', 'Card has WI but nothing loaded into ST');
                     }
                 }
             } else {
-                addLog('info', 'Test', 'No character_book found in card');
+                addLog('info', 'Test', 'No character_book in card');
             }
         })
         .catch(err => {
@@ -220,13 +246,40 @@ jQuery(async () => {
     });
     
     $('#wi-analyze').on('click', () => {
-        analyzeExtensions();
+        analyzeExtensions(false);
+    });
+    
+    $('#wi-list-all').on('click', () => {
+        addLog('info', 'List', 'Listing all installed extensions...');
+        
+        const settings = getExtensionSettings();
+        const exts = Object.keys(settings);
+        
+        if (exts.length === 0) {
+            addLog('warning', 'List', 'No extensions found or unable to access extension_settings');
+            addLog('info', 'List', 'Trying alternative methods...');
+            
+            // 尝试从 DOM 中获取扩展列表
+            const extElements = document.querySelectorAll('[id^="third-party"]');
+            if (extElements.length > 0) {
+                addLog('info', 'List', `Found ${extElements.length} third-party extension scripts in DOM:`);
+                extElements.forEach((el, idx) => {
+                    const id = el.id.replace('third-party_', '').replace('-js', '');
+                    addLog('info', 'List', `${idx + 1}. ${id}`);
+                });
+            }
+        } else {
+            addLog('info', 'List', `Found ${exts.length} extensions:`);
+            exts.forEach((ext, idx) => {
+                addLog('info', 'List', `${idx + 1}. ${ext}`);
+            });
+        }
     });
     
     $('#wi-find-culprit').on('click', async () => {
         addLog('info', 'Culprit', '🔍 Starting deep investigation...');
         
-        // 1. 检查哪些扩展监听了相关事件
+        // 1. 检查事件监听器
         if (window.eventSource && window.event_types) {
             addLog('info', 'Culprit', 'Checking event listeners...');
             
@@ -239,141 +292,147 @@ jQuery(async () => {
             
             relevantEvents.forEach(eventName => {
                 const event = window.event_types[eventName];
-                if (event && window.eventSource.listenerCount(event) > 0) {
+                if (event && typeof window.eventSource.listenerCount === 'function') {
                     const count = window.eventSource.listenerCount(event);
-                    addLog('warning', 'Culprit', `Event ${eventName} has ${count} listeners`);
-                    
-                    if (count > 3) {
-                        markSuspicious('Unknown Extension', `Unusual number of ${eventName} listeners (${count})`);
+                    if (count > 0) {
+                        addLog('info', 'Culprit', `Event ${eventName}: ${count} listeners`);
+                        if (count > 3) {
+                            markSuspicious('Multiple Extensions', `Unusual number of ${eventName} listeners (${count})`);
+                        }
                     }
                 }
             });
         }
         
-        // 2. 检查修改过的全局函数
-        addLog('info', 'Culprit', 'Checking for function modifications...');
+        // 2. 检查关键函数
+        addLog('info', 'Culprit', 'Checking critical functions...');
         
         const criticalFunctions = [
             'importEmbeddedWorldInfo',
             'importCharacter', 
-            'processDroppedFiles',
-            'loadWorldInfoData'
+            'processDroppedFiles'
         ];
         
         criticalFunctions.forEach(funcName => {
             if (window[funcName]) {
-                const func = window[funcName];
-                const funcStr = func.toString();
+                const funcStr = window[funcName].toString();
                 
-                // 检查函数是否被包装过
-                if (funcStr.includes('original') || funcStr.includes('apply') || funcStr.includes('call')) {
-                    addLog('warning', 'Culprit', `${funcName} appears to be wrapped/hooked`);
-                    markSuspicious('Unknown Extension', `Hooked function: ${funcName}`);
+                // 检查是否被 hook
+                if (funcStr.includes('original.apply') || funcStr.includes('original.call')) {
+                    addLog('warning', 'Culprit', `⚠️ ${funcName} is wrapped/hooked`);
+                    markSuspicious('Unknown Extension', `Hooked: ${funcName}`);
                 }
+                
+                // 检查函数长度（过长可能被修改）
+                if (funcStr.length > 5000) {
+                    addLog('warning', 'Culprit', `${funcName} has unusually large code (${funcStr.length} chars)`);
+                }
+            } else {
+                addLog('warning', 'Culprit', `${funcName} not found in window object`);
             }
         });
         
-        // 3. 分析所有扩展的代码特征
+        // 3. 检查全局污染
+        addLog('info', 'Culprit', 'Checking for global modifications...');
+        const globalProps = Object.keys(window);
+        const suspicious = globalProps.filter(prop => {
+            return (prop.startsWith('ext_') || 
+                   prop.startsWith('plugin_') ||
+                   prop.startsWith('stscript_')) &&
+                   (prop.toLowerCase().includes('world') || 
+                    prop.toLowerCase().includes('import'));
+        });
+        
+        if (suspicious.length > 0) {
+            addLog('warning', 'Culprit', `Found suspicious globals: ${suspicious.join(', ')}`);
+            suspicious.forEach(prop => {
+                markSuspicious('Global Pollution', `Suspicious global: ${prop}`);
+            });
+        }
+        
+        // 4. 分析扩展
         analyzeExtensions(true);
         
-        addLog('success', 'Culprit', '✓ Investigation complete - check suspicious list above');
+        // 5. 检查 DOM 中的扩展脚本
+        addLog('info', 'Culprit', 'Checking loaded extension scripts...');
+        const scripts = document.querySelectorAll('script[src*="extensions"]');
+        addLog('info', 'Culprit', `Found ${scripts.length} extension scripts loaded`);
+        
+        addLog('success', 'Culprit', '✓ Investigation complete');
+        
+        if (suspiciousExtensions.size === 0) {
+            addLog('info', 'Culprit', 'No obvious culprit found - check the log above for clues');
+        }
     });
     
     function analyzeExtensions(deep = false) {
         addLog('info', 'Analysis', 'Analyzing extensions...');
         
-        if (!window.extension_settings) {
-            addLog('error', 'Analysis', 'extension_settings not available');
+        const settings = getExtensionSettings();
+        const exts = Object.keys(settings);
+        
+        if (exts.length === 0) {
+            addLog('warning', 'Analysis', 'Cannot access extension_settings');
+            addLog('info', 'Analysis', 'Click "List All Extensions" to see loaded extensions');
             return;
         }
         
-        const exts = Object.keys(window.extension_settings);
         $('#ext-count').text(exts.length);
+        addLog('info', 'Analysis', `Found ${exts.length} extensions`);
         
-        addLog('info', 'Analysis', `Found ${exts.length} extensions total`);
-        
-        // 检查 WI 相关扩展
+        // WI 相关扩展
         const wiRelated = exts.filter(name => {
             const lower = name.toLowerCase();
             return lower.includes('world') || 
                    lower.includes('lorebook') || 
                    lower.includes('import') ||
-                   lower.includes('character');
+                   lower.includes('character') ||
+                   lower.includes('book');
         });
         
         if (wiRelated.length > 0) {
-            addLog('warning', 'Analysis', `WI-related extensions found:`);
+            addLog('warning', 'Analysis', `WI-related extensions (${wiRelated.length}):`);
             wiRelated.forEach(ext => {
-                addLog('warning', 'Analysis', `  - ${ext}`);
-                markSuspicious(ext, 'Extension name suggests WI functionality');
+                addLog('warning', 'Analysis', `  • ${ext}`);
+                markSuspicious(ext, 'Name suggests WI functionality');
             });
         }
         
-        // Deep analysis
         if (deep) {
-            addLog('info', 'Analysis', 'Performing deep analysis...');
+            addLog('info', 'Analysis', 'Deep analysis mode...');
             
-            // 检查每个扩展的设置
             exts.forEach(extName => {
-                const settings = window.extension_settings[extName];
-                if (settings && typeof settings === 'object') {
-                    const keys = Object.keys(settings);
-                    
-                    // 查找可疑的设置项
+                const extSettings = settings[extName];
+                if (extSettings && typeof extSettings === 'object') {
+                    const keys = Object.keys(extSettings);
                     const suspiciousKeys = keys.filter(key => {
                         const lower = key.toLowerCase();
                         return lower.includes('world') || 
-                               lower.includes('lorebook') ||
                                lower.includes('import') ||
                                lower.includes('hook') ||
                                lower.includes('intercept');
                     });
                     
                     if (suspiciousKeys.length > 0) {
-                        addLog('warning', 'Analysis', `${extName} has suspicious settings: ${suspiciousKeys.join(', ')}`);
-                        markSuspicious(extName, `Has WI-related settings: ${suspiciousKeys.join(', ')}`);
+                        addLog('warning', 'Analysis', `${extName}: ${suspiciousKeys.join(', ')}`);
+                        markSuspicious(extName, `Settings: ${suspiciousKeys.join(', ')}`);
                     }
                 }
             });
-            
-            // 检查 STscript 相关
-            if (window.executeSlashCommandsOnChatInput) {
-                addLog('info', 'Analysis', 'Checking STscript commands...');
-                
-                // 尝试获取已注册的命令
-                if (window.SlashCommandParser && window.SlashCommandParser.commands) {
-                    const commands = Object.keys(window.SlashCommandParser.commands);
-                    const wiCommands = commands.filter(cmd => 
-                        cmd.includes('world') || 
-                        cmd.includes('lorebook') ||
-                        cmd.includes('wi')
-                    );
-                    
-                    if (wiCommands.length > 0) {
-                        addLog('warning', 'Analysis', `Found ${wiCommands.length} WI-related slash commands: ${wiCommands.join(', ')}`);
-                        markSuspicious('STscript', `Registered WI commands: ${wiCommands.join(', ')}`);
-                    }
-                }
-            }
         }
         
-        addLog('success', 'Analysis', '✓ Analysis complete');
+        addLog('success', 'Analysis', '✓ Complete');
     }
     
-    // Setup hooks
     function setupHooks() {
-        addLog('info', 'Hook', 'Setting up function hooks...');
+        addLog('info', 'Hook', 'Setting up hooks...');
         let hookCount = 0;
         
-        // Hook importEmbeddedWorldInfo with call stack tracking
         if (window.importEmbeddedWorldInfo) {
             const original = window.importEmbeddedWorldInfo;
             window.importEmbeddedWorldInfo = async function(...args) {
                 const start = performance.now();
-                
-                // 获取调用栈
                 const stack = new Error().stack;
-                callStack.push(stack);
                 
                 addLog('info', 'Import', '⚡ importEmbeddedWorldInfo called');
                 
@@ -390,103 +449,76 @@ jQuery(async () => {
                         if (count === 0) {
                             failCount++;
                             $('#fail-count').text(failCount);
-                            addLog('error', 'Import', `⚠️ RETURNED 0 ENTRIES! Duration: ${duration}ms`);
+                            addLog('error', 'Import', `⚠️ RETURNED 0 ENTRIES! (${duration}ms)`);
                             
-                            // 分析调用栈查找可疑扩展
-                            analyzeCallStack(stack);
+                            // 分析调用栈
+                            const lines = stack.split('\n');
+                            const extPaths = lines.filter(line => line.includes('/extensions/'));
+                            if (extPaths.length > 0) {
+                                addLog('info', 'Import', 'Extensions in call stack:');
+                                extPaths.forEach(line => {
+                                    const match = line.match(/extensions\/(?:third-party\/)?([^\/\?]+)/);
+                                    if (match && match[1] !== extensionName) {
+                                        addLog('warning', 'Import', `  • ${match[1]}`);
+                                        markSuspicious(match[1], 'In import call stack');
+                                    }
+                                });
+                            }
                             
                             diagnose();
                         } else {
-                            addLog('success', 'Import', `✓ Imported ${count} entries (${duration}ms)`);
+                            addLog('success', 'Import', `✓ ${count} entries (${duration}ms)`);
                         }
                     }
                     
                     return result;
                 } catch (error) {
-                    addLog('error', 'Import', `✗ Failed: ${error.message}`);
-                    addLog('error', 'Import', `Stack: ${error.stack}`);
-                    
-                    // 分析错误栈
-                    analyzeCallStack(error.stack);
-                    
+                    addLog('error', 'Import', `✗ ${error.message}`);
                     throw error;
                 }
             };
             addLog('success', 'Hook', '✓ Hooked importEmbeddedWorldInfo');
             hookCount++;
+        } else {
+            addLog('warning', 'Hook', '⚠️ importEmbeddedWorldInfo not found');
         }
         
         $('#hook-count').text(hookCount);
     }
     
-    // 分析调用栈找出可疑扩展
-    function analyzeCallStack(stack) {
-        if (!stack) return;
-        
-        addLog('info', 'Stack', 'Analyzing call stack...');
-        
-        const lines = stack.split('\n');
-        const extensionPaths = lines.filter(line => 
-            line.includes('/extensions/') || 
-            line.includes('third-party')
-        );
-        
-        extensionPaths.forEach(line => {
-            // 尝试提取扩展名称
-            const match = line.match(/extensions\/(?:third-party\/)?([^\/]+)/);
-            if (match) {
-                const extName = match[1];
-                if (extName !== extensionName) { // 排除自己
-                    addLog('warning', 'Stack', `Extension in call stack: ${extName}`);
-                    markSuspicious(extName, 'Found in import call stack');
-                }
-            }
-        });
-    }
-    
     function diagnose() {
         addLog('error', 'Diagnosis', '═══════════════════════════');
-        addLog('error', 'Diagnosis', '⚠️ IMPORT FAILURE DETECTED');
+        addLog('error', 'Diagnosis', '⚠️ IMPORT FAILURE');
         addLog('error', 'Diagnosis', '═══════════════════════════');
         
         if (suspiciousExtensions.size > 0) {
             addLog('error', 'Diagnosis', '');
             addLog('error', 'Diagnosis', '🎯 Likely culprits:');
             suspiciousExtensions.forEach((reasons, ext) => {
-                addLog('error', 'Diagnosis', `  • ${ext}`);
+                addLog('error', 'Diagnosis', `  📌 ${ext}`);
             });
-            addLog('error', 'Diagnosis', '');
-            addLog('info', 'Diagnosis', '💡 Recommended action:');
-            addLog('info', 'Diagnosis', `Try disabling the extensions listed above one by one`);
+            addLog('info', 'Diagnosis', '');
+            addLog('info', 'Diagnosis', '💡 Try disabling these extensions one by one');
         } else {
-            addLog('info', 'Diagnosis', 'No obvious culprit found');
-            addLog('info', 'Diagnosis', 'Click "Find Culprit" button for deeper analysis');
+            addLog('info', 'Diagnosis', 'Click "Find Culprit" for deeper analysis');
         }
-        
-        addLog('info', 'Diagnosis', '');
-        addLog('info', 'Diagnosis', '📋 General troubleshooting:');
-        addLog('info', 'Diagnosis', '1. Check browser console (F12) for errors');
-        addLog('info', 'Diagnosis', '2. Verify character card contains WI data');
-        addLog('info', 'Diagnosis', '3. Try importing character again');
     }
     
-    // 初始化
+    // 等待 API 就绪后初始化
+    await waitForAPI();
+    
     setupHooks();
     
-    if (window.extension_settings) {
-        const extCount = Object.keys(window.extension_settings).length;
-        $('#ext-count').text(extCount);
-    }
+    const settings = getExtensionSettings();
+    $('#ext-count').text(Object.keys(settings).length);
     
-    addLog('success', 'System', '✓ WI Import Debugger initialized');
-    console.log('[WI Debugger] ✓ Extension loaded');
+    addLog('success', 'System', '✓ Debugger ready');
+    console.log('[WI Debugger] ✓ Loaded');
     
-    // 导出到全局
     window.wiDebugger = {
         logs,
         suspicious: suspiciousExtensions,
-        addLog,
-        analyze: () => $('#wi-analyze').click(),
+        listAll: () => $('#wi-list-all').click(),
         findCulprit: () => $('#wi-find-culprit').click()
     };
 });
