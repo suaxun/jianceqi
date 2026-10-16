@@ -60,19 +60,30 @@ window.fetch = async function(input, options = {}) {
         }
     }
 
-    // ---- B. 世界书写入到底写了几条 ----
-    const isWIEdit = /\/api\/worldinfo\/edit/i.test(url);
-    if (isWIEdit && options?.body) {
-        try {
-            const body = JSON.parse(options.body);
-            const entries = body.entries || body.data?.entries || body.world?.entries;
-            if (Array.isArray(entries)) {
-                addLog(entries.length === 0 ? 'error' : 'success', 'WI-TRACE', `请求体 entries 数量: ${entries.length}`);
-            } else {
-                addLog('info', 'WI-TRACE', `请求体字段: ${Object.keys(body).join(', ')}`);
+const isWIEdit = /\/api\/worldinfo\/edit/i.test(url);
+if (isWIEdit && options?.body) {
+    try {
+        const body = JSON.parse(options.body);
+        const data = body.data || body;
+        const entries = data.entries;
+
+        if (Array.isArray(entries)) {
+            addLog(entries.length===0?'error':'success','WI-TRACE',`entries数组数量: ${entries.length}`);
+        } else if (entries && typeof entries === 'object') {
+            const keys = Object.keys(entries);
+            addLog(keys.length===0?'error':'success','WI-TRACE',`entries对象数量: ${keys.length}`);
+            if (keys.length > 0) {
+                addLog('info','WI-TRACE',`前3个key: ${keys.slice(0,3).join(', ')}`);
+                // 再看第一条有没有 content
+                const first = entries[keys[0]];
+                addLog('info','WI-TRACE',`第一条字段: ${Object.keys(first||{}).join(', ')}`);
             }
-        } catch(e) {}
-    }
+        } else {
+            addLog('info','WI-TRACE',`没找到entries, body keys: ${Object.keys(body).join(', ')}, data keys: ${Object.keys(data||{}).join(', ')}`);
+        }
+    } catch(e) {}
+}
+
 
     const resp = await originalFetch.call(this, input, options);
 
@@ -131,7 +142,7 @@ window.fetch = async function(input, options = {}) {
                     const char = ctx.characters?.[chid];
                     addLog('info', `CHECK+${delay}ms`, `当前角色: ${char?.name}, avatar=${char?.avatar}`);
                     if (char) {
-                        const r = await origFetch('/api/characters/get', {
+                        const r = await originalFetch('/api/characters/get', {
                             method:'POST', headers:{'Content-Type':'application/json'},
                             body: JSON.stringify({ avatar_url: char.avatar })
                         });
