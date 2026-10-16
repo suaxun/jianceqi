@@ -457,10 +457,10 @@ ${'='.repeat(60)}
 jQuery(async () => {
     console.log('[WI Debugger] jQuery ready, starting initialization...');
     
-    const debugger = new WorldInfoDebugger();
-    await debugger.init();
+    const wiDebugger = new WorldInfoDebugger();
+    await wiDebugger.init();
     
     // Export to window for console access
-    window.wiDebugger = debugger;
+    window.wiDebugger = wiDebugger;
     console.log('[WI Debugger] ✓ Available as window.wiDebugger');
 });
