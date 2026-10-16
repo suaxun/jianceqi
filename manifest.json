@@ -1,0 +1,12 @@
+{
+  "display_name": "World Info Import Debugger",
+  "loading_order": 1,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Assistant",
+  "version": "1.0.0",
+  "homePage": "https://github.com/yourusername/SillyTavern-WorldInfoDebugger",
+  "auto_update": false
+}
